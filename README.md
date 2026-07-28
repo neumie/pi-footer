@@ -12,7 +12,7 @@ GPT-5.6 Sol · high · 61%/258k · ↑412k ↓18k                 extension stat
 - Two compact rows that preserve project and model information.
 - Current directory and project trust state.
 - Model, reasoning effort, context usage, and parent-session input/output tokens.
-- Safe, width-bounded rendering of allowed extension statuses.
+- Safe, width-bounded rendering of allowed extension statuses; sidebar activity, MCP/auth, and LSP infrastructure statuses stay hidden.
 - Announces its mounted height as `{ rows: 2 }` on `pi-footer:mounted`.
 - Defers reload-only mounting by one event-loop turn so Pi can settle its layout.
 - No monetary-cost display.

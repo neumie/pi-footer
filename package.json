@@ -1,6 +1,6 @@
 {
   "name": "@neumie/pi-footer",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A compact two-row session footer for Pi.",
   "type": "module",
   "license": "MIT",

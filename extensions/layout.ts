@@ -95,8 +95,14 @@ function context(
 	);
 }
 
-function isSidebarOwnedStatus(key: string): boolean {
-	return key === "background-jobs" || key.startsWith("subagent-");
+function isHiddenFooterStatus(key: string): boolean {
+	return (
+		key === "background-jobs" ||
+		key.startsWith("subagent-") ||
+		key === "mcp" ||
+		key.startsWith("mcp-") ||
+		key === "pi-lens-lsp"
+	);
 }
 
 /** Pure two-row footer renderer. */
@@ -129,7 +135,7 @@ export function renderFooter(
 	);
 	const ctx = context(theme, view.contextUsage);
 	const statuses = [...view.statuses.entries()]
-		.filter(([key]) => !isSidebarOwnedStatus(key))
+		.filter(([key]) => !isHiddenFooterStatus(key))
 		.sort(([left], [right]) => left.localeCompare(right))
 		.map(([, value]) => sanitizeStatusText(value, 120))
 		.filter(Boolean);

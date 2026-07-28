@@ -214,10 +214,10 @@ test("layout fits Unicode and keeps sidebar activity out of the footer", () => {
 	);
 	assert.match(themed[0], /<success>trusted<\/success>/);
 	assert.match(themed[1], /A styled.*Z status/);
-	assert.doesNotMatch(themed.join("\n"), /background job|live detail/);
-	assert.match(themed[1], /MCP: 0\/4 servers/);
-	assert.match(themed[1], /Authenticating calendar/);
-	assert.match(themed[1], /LSP Active: typescript/);
+	assert.doesNotMatch(
+		themed.join("\n"),
+		/background job|live detail|MCP:|Authenticating calendar|LSP Active:/,
+	);
 	assert.doesNotMatch(themed.join("\n"), /agents|shells|\x1b\]/);
 
 	const hostile = renderFooter(
