@@ -1,0 +1,397 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import type { TUI } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import {
+	FOOTER_MOUNTED_EVENT,
+	FOOTER_ROWS,
+	FooterController,
+	type FooterRuntimeDependencies,
+} from "../extensions/controller.ts";
+import {
+	formatModel,
+	formatTokens,
+	parseTokenUsage,
+	sanitizeDisplayText,
+	sanitizeStatusText,
+} from "../extensions/domain.ts";
+import extension from "../extensions/footer.ts";
+import { renderFooter, type ThemeLike } from "../extensions/layout.ts";
+import { sessionTokens } from "../extensions/tokens.ts";
+
+type LifecycleHandler = (event: unknown, context: ExtensionContext) => unknown;
+type BusHandler = (payload: unknown) => void;
+
+class FakePi {
+	readonly lifecycle = new Map<string, LifecycleHandler[]>();
+	readonly bus = new Map<string, BusHandler[]>();
+	readonly events = {
+		on: (name: string, handler: BusHandler) => {
+			this.bus.set(name, [...(this.bus.get(name) ?? []), handler]);
+			return () =>
+				this.bus.set(
+					name,
+					(this.bus.get(name) ?? []).filter((item) => item !== handler),
+				);
+		},
+		emit: (name: string, payload: unknown) => {
+			for (const handler of this.bus.get(name) ?? []) handler(payload);
+		},
+	};
+	on(name: string, handler: LifecycleHandler): void {
+		this.lifecycle.set(name, [...(this.lifecycle.get(name) ?? []), handler]);
+	}
+	getThinkingLevel(): "high" {
+		return "high";
+	}
+	api(): ExtensionAPI {
+		return this as unknown as ExtensionAPI;
+	}
+}
+
+interface FakeUI {
+	footerFactory?: (
+		tui: TUI,
+		theme: ThemeLike,
+		footerData: { getExtensionStatuses(): ReadonlyMap<string, string> },
+	) => { render(width: number): string[]; dispose?(): void };
+	statusWrites: unknown[];
+	widgetWrites: unknown[];
+}
+
+function makeContext(
+	ui: FakeUI,
+	branchEntries: unknown[] = [],
+	sessionId = "footer-test-session",
+): ExtensionContext {
+	return {
+		cwd: "/tmp/project/emoji-🧪",
+		model: { id: "gpt-5.6-sol" },
+		isProjectTrusted: () => true,
+		getContextUsage: () => ({ tokens: 10, contextWindow: 100, percent: 10 }),
+		sessionManager: {
+			getBranch: () => branchEntries,
+			getSessionFile: () => sessionId,
+			getSessionId: () => sessionId,
+		},
+		ui: {
+			setStatus(...args: unknown[]) {
+				ui.statusWrites.push(args);
+			},
+			setWidget(...args: unknown[]) {
+				ui.widgetWrites.push(args);
+			},
+			setFooter(factory: unknown) {
+				ui.footerFactory = factory as FakeUI["footerFactory"];
+			},
+		},
+	} as unknown as ExtensionContext;
+}
+
+function theme(): ThemeLike {
+	return { fg: (_name, text) => text, bold: (text) => text };
+}
+
+function dependencies(
+	overrides: Partial<FooterRuntimeDependencies> = {},
+): FooterRuntimeDependencies {
+	return {
+		scheduleMount(handler) {
+			const immediate = setImmediate(handler);
+			return () => clearImmediate(immediate);
+		},
+		...overrides,
+	};
+}
+
+function createFooter(
+	ui: FakeUI,
+	requestRender: () => void,
+	statuses = new Map<string, string>(),
+) {
+	assert.ok(ui.footerFactory);
+	return ui.footerFactory!({ requestRender } as unknown as TUI, theme(), {
+		getExtensionStatuses: () => statuses,
+	});
+}
+
+test("domain formats footer values and removes terminal controls", () => {
+	assert.deepEqual(parseTokenUsage({ input: 12, output: 8 }), {
+		input: 12,
+		output: 8,
+		total: 20,
+	});
+	assert.equal(formatTokens(1_234), "1.2k");
+	assert.equal(formatModel("anthropic/claude-opus-4-8:high"), "opus-4-8");
+	assert.equal(formatModel("openai/gpt-5.6-sol"), "GPT-5.6 Sol");
+	assert.equal(formatModel("openai/safe\x1b[2J\nmodel"), "safe model");
+	assert.equal(sanitizeDisplayText("safe\x1b[31m red\x1b[0m", 80), "safe red");
+	assert.equal(
+		sanitizeStatusText("safe\x1b[31m red\x1b[0m\x1b[2J\x1b]title\x07", 80),
+		"safe\x1b[31m red\x1b[0m",
+	);
+	assert.equal(sanitizeStatusText("a\x1bPpayload\x1b\\b\x1b", 80), "ab");
+});
+
+test("session token totals ignore subagent snapshots and count only parent messages", () => {
+	const entries = [
+		{
+			type: "message",
+			message: { role: "assistant", usage: { input: 12, output: 8 } },
+		},
+		{
+			type: "custom",
+			customType: "pi-session-footer:async-tokens",
+			data: { totalTokens: { input: 900, output: 100 } },
+		},
+		{
+			type: "custom_message",
+			customType: "subagent-notify",
+			content: "Session file: /tmp/child/session.jsonl",
+		},
+		{
+			type: "message",
+			message: { role: "assistant", usage: { input: 3, output: 2 } },
+		},
+	];
+	const ui: FakeUI = { statusWrites: [], widgetWrites: [] };
+	assert.deepEqual(sessionTokens(makeContext(ui, entries)), {
+		input: 15,
+		output: 10,
+		total: 25,
+	});
+});
+
+test("layout fits Unicode and keeps sidebar activity out of the footer", () => {
+	const lines = renderFooter(
+		{
+			cwd: "~/proj/🧪/e\u0301/very-long-leaf",
+			trusted: true,
+			modelId: "gpt-5.6-sol",
+			thinkingLevel: "high",
+			inputTokens: 1_234,
+			outputTokens: 99,
+			contextUsage: { contextWindow: 200_000, percent: 75 },
+			statuses: new Map([
+				["zeta", "Z status"],
+				["alpha", "A status"],
+			]),
+		},
+		theme(),
+		28,
+	);
+	assert.equal(lines.length, FOOTER_ROWS);
+	assert.ok(lines.every((line) => visibleWidth(line) <= 28));
+
+	const themed = renderFooter(
+		{
+			cwd: "~/x",
+			trusted: true,
+			modelId: "x",
+			thinkingLevel: "off",
+			inputTokens: 0,
+			outputTokens: 0,
+			statuses: new Map([
+				["alpha", "\x1b[31mA styled\x1b[0m\n\x1b]unsafe\x07"],
+				["background-jobs", "1 background job: Test suite"],
+				["subagent-slash", "2 tools | live detail"],
+				["mcp", "MCP: 0/4 servers"],
+				["mcp-auth", "Authenticating calendar..."],
+				["pi-lens-lsp", "LSP Active: typescript"],
+				["zeta", "Z status"],
+			]),
+		},
+		{
+			fg: (color, text) => `<${color}>${text}</${color}>`,
+			bold: (text) => `<bold>${text}</bold>`,
+		},
+		500,
+	);
+	assert.match(themed[0], /<success>trusted<\/success>/);
+	assert.match(themed[1], /A styled.*Z status/);
+	assert.doesNotMatch(themed.join("\n"), /background job|live detail/);
+	assert.match(themed[1], /MCP: 0\/4 servers/);
+	assert.match(themed[1], /Authenticating calendar/);
+	assert.match(themed[1], /LSP Active: typescript/);
+	assert.doesNotMatch(themed.join("\n"), /agents|shells|\x1b\]/);
+
+	const hostile = renderFooter(
+		{
+			cwd: "/tmp/good\nINJECTED\x1b]title\x07",
+			trusted: true,
+			modelId: "openai/safe\x1b[2J-model",
+			thinkingLevel: "high\x1b[2J\nINJECTED",
+			inputTokens: 0,
+			outputTokens: 0,
+			statuses: new Map(),
+		},
+		theme(),
+		120,
+	);
+	assert.match(hostile.join("\n"), /good INJECTED/);
+	assert.match(hostile.join("\n"), /safe-model/);
+	assert.doesNotMatch(hostile.join("\n"), /\x1b|\nINJECTED/);
+});
+
+test("controller mounts without owning statuses or activity event subscriptions", async () => {
+	const pi = new FakePi();
+	const controller = new FooterController(pi.api(), dependencies());
+	controller.register();
+	controller.register();
+	assert.equal(pi.bus.size, 0);
+	let mountedRows: unknown;
+	const stopMountedListener = pi.events.on(FOOTER_MOUNTED_EVENT, (payload) => {
+		mountedRows = (payload as { rows?: unknown }).rows;
+	});
+	const branch = [
+		{
+			type: "message",
+			message: { role: "assistant", usage: { input: 12, output: 8 } },
+		},
+	];
+	const ui: FakeUI = { statusWrites: [], widgetWrites: [] };
+	const ctx = makeContext(ui, branch);
+	controller.start(ctx);
+	assert.equal(mountedRows, FOOTER_ROWS);
+	stopMountedListener();
+	let renderRequests = 0;
+	const footer = createFooter(
+		ui,
+		() => { renderRequests += 1; },
+		new Map([["other-extension", "kept"]]),
+	);
+	assert.match(footer.render(120).join("\n"), /↑12 ↓8/);
+	assert.match(footer.render(120).join("\n"), /kept/);
+	assert.deepEqual(ui.statusWrites, []);
+	assert.deepEqual(ui.widgetWrites, []);
+	assert.equal(pi.bus.get("subagent:async-started"), undefined);
+	assert.equal(pi.bus.get("background-jobs:changed"), undefined);
+	const before = renderRequests;
+	pi.events.emit("subagent:async-started", { id: "run" });
+	pi.events.emit("background-jobs:changed", { runningCount: 1 });
+	assert.equal(renderRequests, before);
+
+	const modelSelect = pi.lifecycle.get("model_select")?.[0];
+	assert.ok(modelSelect);
+	await modelSelect({ model: { id: "claude-opus-4-8" } }, ctx);
+	assert.match(footer.render(120).join("\n"), /opus-4-8/);
+	assert.ok(renderRequests > before);
+	footer.dispose?.();
+	controller.stop();
+});
+
+test("reload defers mounting until Pi settles its final layout", async () => {
+	const pi = new FakePi();
+	let pendingMount: (() => void) | undefined;
+	let mountCancelled = false;
+	const controller = new FooterController(pi.api(), dependencies({
+		scheduleMount(handler) {
+			pendingMount = handler;
+			return () => { mountCancelled = true; };
+		},
+	}));
+	controller.register();
+	const ui: FakeUI = { statusWrites: [], widgetWrites: [] };
+	let mountedRows: unknown;
+	pi.events.on(FOOTER_MOUNTED_EVENT, (payload) => {
+		mountedRows = (payload as { rows?: unknown }).rows;
+	});
+	const start = pi.lifecycle.get("session_start")?.[0];
+	assert.ok(start);
+	await start({ reason: "reload" }, makeContext(ui));
+	assert.equal(ui.footerFactory, undefined);
+	assert.equal(mountedRows, undefined);
+	assert.ok(pendingMount);
+	assert.equal(mountCancelled, false);
+	pendingMount();
+	assert.ok(ui.footerFactory);
+	assert.equal(mountedRows, FOOTER_ROWS);
+	controller.stop();
+});
+
+test("shutdown cancels a pending reload mount", async () => {
+	const pi = new FakePi();
+	let pendingMount: (() => void) | undefined;
+	let mountCancelled = false;
+	const controller = new FooterController(pi.api(), dependencies({
+		scheduleMount(handler) {
+			pendingMount = handler;
+			return () => { mountCancelled = true; };
+		},
+	}));
+	controller.register();
+	const ui: FakeUI = { statusWrites: [], widgetWrites: [] };
+	const ctx = makeContext(ui);
+	const start = pi.lifecycle.get("session_start")?.[0];
+	const shutdown = pi.lifecycle.get("session_shutdown")?.[0];
+	assert.ok(start);
+	assert.ok(shutdown);
+	await start({ reason: "reload" }, ctx);
+	assert.ok(pendingMount);
+	await shutdown({ reason: "reload" }, ctx);
+	assert.equal(mountCancelled, true);
+	pendingMount();
+	assert.equal(ui.footerFactory, undefined);
+});
+
+test("token updates accept fresh context wrappers only for the current session", async () => {
+	const pi = new FakePi();
+	const controller = new FooterController(pi.api(), dependencies());
+	controller.register();
+	const ui: FakeUI = { statusWrites: [], widgetWrites: [] };
+	const branch: unknown[] = [];
+	const startContext = makeContext(ui, branch);
+	controller.start(startContext);
+	const footer = createFooter(ui, () => undefined);
+	const turnEnd = pi.lifecycle.get("turn_end")?.[0];
+	assert.ok(turnEnd);
+	await turnEnd({}, makeContext(ui, [
+		{ type: "message", message: { role: "assistant", usage: { input: 999, output: 999 } } },
+	], "foreign-session"));
+	assert.match(footer.render(200).join("\n"), /↑0 ↓0/);
+
+	branch.push({
+		type: "message",
+		message: { role: "assistant", usage: { input: 12, output: 18 } },
+	});
+	const freshWrapper = { ...startContext } as ExtensionContext;
+	await turnEnd({}, freshWrapper);
+	assert.match(footer.render(200).join("\n"), /↑12 ↓18/);
+	controller.stop();
+});
+
+test("a replaced footer generation becomes inert", () => {
+	const pi = new FakePi();
+	const controller = new FooterController(pi.api(), dependencies());
+	const firstUi: FakeUI = { statusWrites: [], widgetWrites: [] };
+	controller.start(makeContext(firstUi));
+	const firstFooter = createFooter(firstUi, () => undefined);
+	const secondUi: FakeUI = { statusWrites: [], widgetWrites: [] };
+	controller.start(makeContext(secondUi, [], "second-session"));
+	assert.deepEqual(firstFooter.render(120), []);
+	assert.ok(secondUi.footerFactory);
+	controller.stop();
+});
+
+test("runtime modules cannot regain activity integrations", async () => {
+	const source = await Promise.all([
+		readFile(new URL("../extensions/controller.ts", import.meta.url), "utf8"),
+		readFile(new URL("../extensions/tokens.ts", import.meta.url), "utf8"),
+	]);
+	assert.doesNotMatch(
+		source.join("\n"),
+		/node:fs|appendEntry|setInterval|status\.json|subagent:async|background-jobs:changed|asyncDir|pi-subagents-uid/,
+	);
+});
+
+test("default export registers the renamed extension entry point", () => {
+	const pi = new FakePi();
+	extension(pi.api());
+	assert.equal(pi.lifecycle.get("session_start")?.length, 1);
+	assert.equal(pi.bus.size, 0);
+});

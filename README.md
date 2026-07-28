@@ -1,37 +1,30 @@
-# pi-session-footer
+# pi-footer
 
-A compact, animated two-row footer for [Pi](https://github.com/earendil-works/pi-mono).
+A compact two-row footer for [Pi](https://github.com/earendil-works/pi-mono).
 
 ```text
-~/code/project · trusted             agents 3 · GPT-5.6 Sol ×2, GPT-5.6 Terra · 128k · 1 shell
-GPT-5.6 Sol · high · 61%/258k · ↑412k ↓18k    2/3 · Review authentication · Running tests 18s
+~/code/project · trusted
+GPT-5.6 Sol · high · 61%/258k · ↑412k ↓18k                 extension status
 ```
 
 ## Features
 
 - Two compact rows that preserve project and model information.
-- Announces its mounted two-row height on Pi's extension event bus so reload placeholders can reserve the exact footer footprint.
-- Defers reload-only mounting by one event-loop turn, letting Pi settle the completion message and editor before the footer becomes visible at its final screen position.
 - Current directory and project trust state.
-- Model, reasoning effort, context usage, and session input/output tokens.
-- Main-session token totals include async subagents invoked during the session.
-- Optional [`pi-subagents`](https://github.com/nicobailon/pi-subagents) integration:
-  - active and queued agent counts;
-  - concise model mix;
-  - live subagent token usage;
-  - workflow goal and logical progress;
-  - smooth, theme-aware pulse while agents are active;
-  - restoration of active runs and durable token totals after reload.
-- Long right-side content truncates before important left-side status.
-- By product choice, background-job, MCP connection/authentication, and LSP status indicators are omitted; other extension statuses remain visible.
+- Model, reasoning effort, context usage, and parent-session input/output tokens.
+- Safe, width-bounded rendering of allowed extension statuses.
+- Announces its mounted height as `{ rows: 2 }` on `pi-footer:mounted`.
+- Defers reload-only mounting by one event-loop turn so Pi can settle its layout.
 - No monetary-cost display.
+
+Async subagents and background jobs are intentionally not integrated here. Their activity belongs in [`pi-sidebar`](https://github.com/neumie/pi-sidebar); matching transient status keys are suppressed to avoid duplicate output.
 
 ## Install
 
 Install directly from GitHub:
 
 ```bash
-pi install git:github.com/neumie/pi-session-footer
+pi install git:github.com/neumie/pi-footer
 ```
 
 Then run `/reload` in Pi.
@@ -39,15 +32,11 @@ Then run `/reload` in Pi.
 For local development:
 
 ```bash
-git clone https://github.com/neumie/pi-session-footer.git
-pi install /absolute/path/to/pi-session-footer
+git clone https://github.com/neumie/pi-footer.git
+pi install /absolute/path/to/pi-footer
 ```
 
 Pi packages execute with your full system permissions. Review extension source before installing.
-
-## pi-subagents setup
-
-The integration activates automatically when `pi-subagents` emits async lifecycle events. It only renders activity in this footer and does not modify `pi-subagents` widgets or statuses.
 
 ## Development
 
@@ -56,15 +45,13 @@ npm install
 npm run check
 ```
 
-Requires Node.js 22.19.0 or newer. The extension is loaded directly from TypeScript; no build step is required.
+Requires Node.js 22.19.0 or newer and Pi 0.82.1. The extension is loaded directly from TypeScript; no build step is required.
 
 ## Notes
 
 - This extension replaces Pi's complete footer. Another extension calling `ctx.ui.setFooter()` may override it depending on load order.
-- Background-job activity is intentionally left to `pi-background-jobs`' above-editor label row so it is not duplicated in the footer.
-- Live subagent activity uses `pi-subagents` async status artifacts associated with the active Pi session. Completed token totals are stored as custom session entries that are not sent to the model, so temporary artifact cleanup does not reset the counter.
-- Existing sessions created before durable snapshots are migrated from up to 256 contained child session files across the async run directories referenced by `subagent-notify` entries on the active branch. The migration snapshot is persisted only after every discovered transcript parses successfully; otherwise the next reload retries it. Reads are bounded to 64 MiB, 200,000 lines, and 100,000 entries per transcript, with an 8 MiB line limit.
-- Smooth color interpolation requires truecolor terminal support; other color modes retain the normal accent color.
+- It does not call `ctx.ui.setStatus()` or `ctx.ui.setWidget()` and does not subscribe to subagent or background-job events.
+- Session token totals come only from assistant messages on the active parent-session branch; legacy subagent snapshot entries are ignored.
 
 ## License
 

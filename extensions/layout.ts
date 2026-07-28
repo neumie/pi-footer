@@ -4,21 +4,11 @@ import {
 	formatTokens,
 	sanitizeDisplayText,
 	sanitizeStatusText,
-	type BackgroundJobsFooterState,
-	type SubagentFooterState,
 } from "./domain.ts";
-
-const OMITTED_EXTENSION_STATUS_KEYS = new Set([
-	"background-jobs",
-	"mcp",
-	"mcp-auth",
-	"pi-lens-lsp",
-]);
 
 export interface ThemeLike {
 	fg(color: string, text: string): string;
 	bold(text: string): string;
-	getFgAnsi?(color: string): string;
 }
 
 export interface FooterViewModel {
@@ -29,14 +19,8 @@ export interface FooterViewModel {
 	inputTokens: number;
 	outputTokens: number;
 	contextUsage?: { contextWindow: number; percent: number | null };
-	subagents?: SubagentFooterState;
-	backgroundJobs?: BackgroundJobsFooterState;
 	statuses: ReadonlyMap<string, string>;
-	now: number;
 }
-
-const PULSE_CYCLE_MS = 2800;
-const PULSE_MIN_BRIGHTNESS = 0.7;
 
 function effortColor(level: string): string {
 	if (level === "off") return "dim";
@@ -68,26 +52,6 @@ function alignSides(
 	);
 }
 
-function pulse(theme: ThemeLike, text: string, now: number): string {
-	const accentAnsi = theme.getFgAnsi?.("accent");
-	const rgb = accentAnsi?.match(/38;2;(\d+);(\d+);(\d+)/);
-	if (!rgb) return theme.fg("accent", text);
-	const wave = (Math.sin((now / PULSE_CYCLE_MS) * Math.PI * 2) + 1) / 2;
-	const brightness = PULSE_MIN_BRIGHTNESS + wave * (1 - PULSE_MIN_BRIGHTNESS);
-	const shade = rgb
-		.slice(1)
-		.map((channel) => Math.min(255, Math.round(Number(channel) * brightness)));
-	return `\x1b[38;2;${shade.join(";")}m${text}\x1b[39m`;
-}
-
-function elapsed(startedAt: number | undefined, now: number): string {
-	if (!startedAt) return "";
-	const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
-	return seconds < 60
-		? `${seconds}s`
-		: `${Math.floor(seconds / 60)}m${seconds % 60}s`;
-}
-
 function truncateLeft(text: string, maxWidth: number): string {
 	if (maxWidth <= 0) return "";
 	if (visibleWidth(text) <= maxWidth) return text;
@@ -108,7 +72,7 @@ export function truncatePath(path: string, maxWidth: number): string {
 	const base = `${head}${separator}…${separator}${parts.at(-1)}`;
 	if (visibleWidth(base) > maxWidth) return truncateLeft(path, maxWidth);
 	let best = base;
-	for (let index = parts.length - 2; index >= 1; index--) {
+	for (let index = parts.length - 2; index >= 1; index -= 1) {
 		const candidate = `${head}${separator}…${separator}${parts.slice(index).join(separator)}`;
 		if (visibleWidth(candidate) <= maxWidth) best = candidate;
 		else break;
@@ -131,6 +95,10 @@ function context(
 	);
 }
 
+function isSidebarOwnedStatus(key: string): boolean {
+	return key === "background-jobs" || key.startsWith("subagent-");
+}
+
 /** Pure two-row footer renderer. */
 export function renderFooter(
 	view: FooterViewModel,
@@ -142,61 +110,32 @@ export function renderFooter(
 	const trust = `${divider}${theme.fg(view.trusted ? "success" : "warning", view.trusted ? "trusted" : "untrusted")}`;
 	const cwd = theme.fg(
 		"muted",
-		truncatePath(view.cwd, width - visibleWidth(trust)),
+		truncatePath(
+			sanitizeDisplayText(view.cwd, 4_096),
+			width - visibleWidth(trust),
+		),
 	);
-	const subagent = view.subagents?.activeCount
-		? pulse(theme, view.subagents.summary, view.now)
-		: (view.subagents?.summary ?? "");
-	const shell = view.backgroundJobs?.runningCount
-		? pulse(
-				theme,
-				`${view.backgroundJobs.runningCount} shell${view.backgroundJobs.runningCount === 1 ? "" : "s"}`,
-				view.now,
-			)
-		: "";
-	const row1 = alignSides(
-		`${cwd}${trust}`,
-		[subagent, shell].filter(Boolean).join(divider),
-		width,
-		ellipsis,
-	);
+	const row1 = alignSides(`${cwd}${trust}`, "", width, ellipsis);
 
 	const model = theme.fg("accent", theme.bold(formatModel(view.modelId)));
+	const safeThinkingLevel = sanitizeDisplayText(view.thinkingLevel, 20);
 	const effort = theme.fg(
-		effortColor(view.thinkingLevel),
-		view.thinkingLevel,
+		effortColor(safeThinkingLevel),
+		safeThinkingLevel,
 	);
 	const tokenText = theme.fg(
 		"text",
 		`↑${formatTokens(view.inputTokens)} ↓${formatTokens(view.outputTokens)}`,
 	);
 	const ctx = context(theme, view.contextUsage);
-	const background = view.backgroundJobs?.runningCount
-		? [
-				"Running",
-				sanitizeDisplayText(
-					view.backgroundJobs.primary?.label ??
-						view.backgroundJobs.primary?.command ??
-						"background job",
-					40,
-				),
-				elapsed(view.backgroundJobs.primary?.startedAt, view.now),
-			]
-				.filter(Boolean)
-				.join(" ")
-		: "";
-	// Product decision: omit only the explicitly selected extension statuses.
 	const statuses = [...view.statuses.entries()]
-		.filter(([key]) => !OMITTED_EXTENSION_STATUS_KEYS.has(key))
+		.filter(([key]) => !isSidebarOwnedStatus(key))
 		.sort(([left], [right]) => left.localeCompare(right))
 		.map(([, value]) => sanitizeStatusText(value, 120))
 		.filter(Boolean);
-	const right = [view.subagents?.workflow, background, ...statuses]
-		.filter(Boolean)
-		.join(" · ");
 	const row2 = alignSides(
 		[model, effort, ctx, tokenText].join(divider),
-		theme.fg("dim", right),
+		theme.fg("dim", statuses.join(" · ")),
 		width,
 		ellipsis,
 	);
