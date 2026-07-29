@@ -3,6 +3,7 @@ import type {
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { TokenUsage } from "./domain.ts";
@@ -18,7 +19,30 @@ export interface FooterRuntimeDependencies {
 }
 
 export const FOOTER_MOUNTED_EVENT = "pi-footer:mounted";
+export const FOOTER_STATUS_SOURCE_REQUEST_EVENT = "pi-footer:status-source:v1:request";
+export const FOOTER_STATUS_SOURCE_READY_EVENT = "pi-footer:status-source:v1:ready";
 export const FOOTER_ROWS = 2;
+
+export interface FooterStatusEntry {
+	key: string;
+	text: string;
+}
+
+export interface FooterStatusSourceReadyPayload {
+	version: 1;
+	sessionId: string;
+	token: string;
+	readStatuses(): readonly FooterStatusEntry[];
+}
+
+interface ActiveStatusSource {
+	payload: FooterStatusSourceReadyPayload;
+	deactivate(): void;
+}
+
+const MAX_STATUS_ENTRIES = 64;
+const MAX_STATUS_KEY_LENGTH = 128;
+const MAX_STATUS_TEXT_LENGTH = 2_048;
 
 function defaultDependencies(): FooterRuntimeDependencies {
 	return {
@@ -55,12 +79,39 @@ function thinkingLevel(pi: ExtensionAPI): string {
 	}
 }
 
+function sessionId(ctx: ExtensionContext): string | undefined {
+	try {
+		const id = ctx.sessionManager.getSessionId();
+		return typeof id === "string" && id.length > 0 ? id : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function copyStatuses(footerData: FooterDataLike): readonly FooterStatusEntry[] {
+	try {
+		const entries: FooterStatusEntry[] = [];
+		for (const [key, text] of footerData.getExtensionStatuses()) {
+			if (typeof key !== "string" || typeof text !== "string") continue;
+			entries.push({
+				key: key.slice(0, MAX_STATUS_KEY_LENGTH),
+				text: text.slice(0, MAX_STATUS_TEXT_LENGTH),
+			});
+			if (entries.length >= MAX_STATUS_ENTRIES) break;
+		}
+		return entries;
+	} catch {
+		return [];
+	}
+}
+
 /** One extension instance owns one session-scoped footer component. */
 export class FooterController {
 	private readonly dependencies: FooterRuntimeDependencies;
 	private session: SessionRuntime | undefined;
 	private cancelPendingMount: (() => void) | undefined;
 	private requestRender: (() => void) | undefined;
+	private statusSource: ActiveStatusSource | undefined;
 	private nextGeneration = 0;
 	private registered = false;
 
@@ -89,6 +140,17 @@ export class FooterController {
 		this.pi.on("thinking_level_select", (_event, ctx) => this.repaintFor(ctx));
 		this.pi.on("turn_end", (_event, ctx) => this.updateMainTokens(ctx));
 		this.pi.on("message_end", (_event, ctx) => this.updateMainTokens(ctx));
+		this.pi.events.on(FOOTER_STATUS_SOURCE_REQUEST_EVENT, (payload) => {
+			try {
+				const request = payload as { version?: unknown; sessionId?: unknown } | undefined;
+				const source = this.statusSource;
+				if (request?.version !== 1 || !source) return;
+				if (request.sessionId !== source.payload.sessionId) return;
+				this.pi.events.emit(FOOTER_STATUS_SOURCE_READY_EVENT, source.payload);
+			} catch {
+				// Cross-extension payloads are untrusted; malformed requests are ignored.
+			}
+		});
 	}
 
 	start(ctx: ExtensionContext, deferMount = false): SessionRuntime {
@@ -136,8 +198,14 @@ export class FooterController {
 		++this.nextGeneration;
 		this.cancelPendingMount?.();
 		this.cancelPendingMount = undefined;
+		this.clearStatusSource();
 		this.requestRender = undefined;
 		this.session = undefined;
+	}
+
+	private clearStatusSource(): void {
+		this.statusSource?.deactivate();
+		this.statusSource = undefined;
 	}
 
 	private createFooter(
@@ -147,20 +215,42 @@ export class FooterController {
 		footerData: FooterDataLike,
 	): Component & { dispose(): void } {
 		const callback = () => tui.requestRender();
+		const current = this.session;
+		let currentSessionId: string | undefined;
+		if (current?.generation === generation) currentSessionId = sessionId(current.ctx);
+		let active = currentSessionId !== undefined;
+		const token = randomUUID();
+		let payload: FooterStatusSourceReadyPayload | undefined;
+		if (currentSessionId) {
+			payload = Object.freeze({
+				version: 1 as const,
+				sessionId: currentSessionId,
+				token,
+				readStatuses: () => {
+					if (!active || !this.isCurrent(generation)) return [];
+					return copyStatuses(footerData);
+				},
+			});
+		}
+		if (payload) {
+			this.clearStatusSource();
+			this.statusSource = { payload, deactivate: () => { active = false; } };
+			this.pi.events.emit(FOOTER_STATUS_SOURCE_READY_EVENT, payload);
+		}
 		if (this.isCurrent(generation)) this.requestRender = callback;
 		return {
 			render: (width: number) => {
-				const current = this.session;
-				if (!current || current.generation !== generation) return [];
+				const runtime = this.session;
+				if (!runtime || runtime.generation !== generation) return [];
 				return renderFooter(
 					{
-						cwd: displayCwd(current.ctx.cwd),
-						trusted: current.ctx.isProjectTrusted(),
-						modelId: current.modelId ?? current.ctx.model?.id ?? "no-model",
+						cwd: displayCwd(runtime.ctx.cwd),
+						trusted: runtime.ctx.isProjectTrusted(),
+						modelId: runtime.modelId ?? runtime.ctx.model?.id ?? "no-model",
 						thinkingLevel: thinkingLevel(this.pi),
-						inputTokens: current.mainTokens.input,
-						outputTokens: current.mainTokens.output,
-						contextUsage: current.ctx.getContextUsage(),
+						inputTokens: runtime.mainTokens.input,
+						outputTokens: runtime.mainTokens.output,
+						contextUsage: runtime.ctx.getContextUsage(),
 						statuses: footerData.getExtensionStatuses(),
 					},
 					theme,
@@ -169,6 +259,8 @@ export class FooterController {
 			},
 			invalidate() {},
 			dispose: () => {
+				active = false;
+				if (this.statusSource?.payload.token === token) this.statusSource = undefined;
 				if (this.requestRender === callback) this.requestRender = undefined;
 			},
 		};

@@ -10,8 +10,11 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import {
 	FOOTER_MOUNTED_EVENT,
 	FOOTER_ROWS,
+	FOOTER_STATUS_SOURCE_READY_EVENT,
+	FOOTER_STATUS_SOURCE_REQUEST_EVENT,
 	FooterController,
 	type FooterRuntimeDependencies,
+	type FooterStatusSourceReadyPayload,
 } from "../extensions/controller.ts";
 import {
 	formatModel,
@@ -238,12 +241,12 @@ test("layout fits Unicode and keeps sidebar activity out of the footer", () => {
 	assert.doesNotMatch(hostile.join("\n"), /\x1b|\nINJECTED/);
 });
 
-test("controller mounts without owning statuses or activity event subscriptions", async () => {
+test("controller mounts without writing statuses or subscribing to activity events", async () => {
 	const pi = new FakePi();
 	const controller = new FooterController(pi.api(), dependencies());
 	controller.register();
 	controller.register();
-	assert.equal(pi.bus.size, 0);
+	assert.deepEqual([...pi.bus.keys()], [FOOTER_STATUS_SOURCE_REQUEST_EVENT]);
 	let mountedRows: unknown;
 	const stopMountedListener = pi.events.on(FOOTER_MOUNTED_EVENT, (payload) => {
 		mountedRows = (payload as { rows?: unknown }).rows;
@@ -282,6 +285,53 @@ test("controller mounts without owning statuses or activity event subscriptions"
 	assert.match(footer.render(120).join("\n"), /opus-4-8/);
 	assert.ok(renderRequests > before);
 	footer.dispose?.();
+	controller.stop();
+});
+
+test("status source replays across load order and becomes inert after disposal", () => {
+	const pi = new FakePi();
+	const controller = new FooterController(pi.api(), dependencies());
+	controller.register();
+	const ui: FakeUI = { statusWrites: [], widgetWrites: [] };
+	controller.start(makeContext(ui, [], "status-session"));
+	const statuses = new Map([
+		["pi-lens-lsp", "LSP Failed: ruby-lsp"],
+		["other", "kept"],
+	]);
+	const footer = createFooter(ui, () => undefined, statuses);
+
+	const sources: FooterStatusSourceReadyPayload[] = [];
+	pi.events.on(FOOTER_STATUS_SOURCE_READY_EVENT, (payload) => {
+		sources.push(payload as FooterStatusSourceReadyPayload);
+	});
+	assert.doesNotThrow(() => pi.events.emit(
+		FOOTER_STATUS_SOURCE_REQUEST_EVENT,
+		new Proxy({}, { get() { throw new Error("hostile request"); } }),
+	));
+	pi.events.emit(FOOTER_STATUS_SOURCE_REQUEST_EVENT, { version: 1 });
+	pi.events.emit(FOOTER_STATUS_SOURCE_REQUEST_EVENT, { version: 1, sessionId: "wrong-session" });
+	assert.equal(sources.length, 0);
+	pi.events.emit(FOOTER_STATUS_SOURCE_REQUEST_EVENT, { version: 1, sessionId: "status-session" });
+	assert.equal(sources.length, 1);
+	const source = sources[0]!;
+	assert.equal(source.version, 1);
+	assert.equal(source.sessionId, "status-session");
+	assert.deepEqual(source.readStatuses(), [
+		{ key: "pi-lens-lsp", text: "LSP Failed: ruby-lsp" },
+		{ key: "other", text: "kept" },
+	]);
+
+	statuses.set("pi-lens-lsp", "LSP Active: ruby-lsp");
+	assert.deepEqual(source.readStatuses()[0], {
+		key: "pi-lens-lsp",
+		text: "LSP Active: ruby-lsp",
+	});
+	assert.notEqual(source.readStatuses(), source.readStatuses());
+
+	controller.start(makeContext(ui, [], "replacement-session"));
+	assert.deepEqual(source.readStatuses(), []);
+	footer.dispose?.();
+	assert.deepEqual(source.readStatuses(), []);
 	controller.stop();
 });
 
@@ -393,5 +443,5 @@ test("default export registers the renamed extension entry point", () => {
 	const pi = new FakePi();
 	extension(pi.api());
 	assert.equal(pi.lifecycle.get("session_start")?.length, 1);
-	assert.equal(pi.bus.size, 0);
+	assert.deepEqual([...pi.bus.keys()], [FOOTER_STATUS_SOURCE_REQUEST_EVENT]);
 });

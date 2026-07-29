@@ -14,10 +14,20 @@ GPT-5.6 Sol · high · 61%/258k · ↑412k ↓18k                 extension stat
 - Model, reasoning effort, context usage, and parent-session input/output tokens.
 - Safe, width-bounded rendering of allowed extension statuses; sidebar activity, MCP/auth, and LSP infrastructure statuses stay hidden.
 - Announces its mounted height as `{ rows: 2 }` on `pi-footer:mounted`.
+- Exposes Pi's read-only extension-status map through a versioned, session-scoped capability for `pi-sidebar`; this does not change footer output.
 - Defers reload-only mounting by one event-loop turn so Pi can settle its layout.
 - No monetary-cost display.
 
 Async subagents and background jobs are intentionally not integrated here. Their activity belongs in [`pi-sidebar`](https://github.com/neumie/pi-sidebar); matching transient status keys are suppressed to avoid duplicate output.
+
+## Status-source compatibility seam
+
+Pi 0.82.1 provides extension statuses only to custom footer factories. To let `pi-sidebar` surface actionable infrastructure failures without taking ownership of the footer, `pi-footer` supports this in-process request/replay protocol:
+
+- request: `pi-footer:status-source:v1:request` with `{ version: 1, sessionId }`
+- ready: `pi-footer:status-source:v1:ready` with `{ version: 1, sessionId, token, readStatuses }`
+
+`readStatuses()` returns a fresh, bounded array of `{ key, text }` entries. It never exposes Pi's mutable map and returns an empty array after footer disposal or session replacement. Consumers must still validate and sanitize every entry. This temporary seam can disappear once Pi exposes extension statuses outside footer factories.
 
 ## Install
 
@@ -50,7 +60,7 @@ Requires Node.js 22.19.0 or newer and Pi 0.82.1. The extension is loaded directl
 ## Notes
 
 - This extension replaces Pi's complete footer. Another extension calling `ctx.ui.setFooter()` may override it depending on load order.
-- It does not call `ctx.ui.setStatus()` or `ctx.ui.setWidget()` and does not subscribe to subagent or background-job events.
+- It does not call `ctx.ui.setStatus()` or `ctx.ui.setWidget()` and does not subscribe to subagent or background-job events. Its only event-bus subscription serves status-source replay requests.
 - Session token totals come only from assistant messages on the active parent-session branch; legacy subagent snapshot entries are ignored.
 
 ## License
