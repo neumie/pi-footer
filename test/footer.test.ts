@@ -12,6 +12,8 @@ import {
 	FOOTER_ROWS,
 	FOOTER_STATUS_SOURCE_READY_EVENT,
 	FOOTER_STATUS_SOURCE_REQUEST_EVENT,
+	POST_FOOTER_SLOT_READY_EVENT,
+	POST_FOOTER_SLOT_REQUEST_EVENT,
 	FooterController,
 	type FooterRuntimeDependencies,
 	type FooterStatusSourceReadyPayload,
@@ -246,7 +248,10 @@ test("controller mounts without writing statuses or subscribing to activity even
 	const controller = new FooterController(pi.api(), dependencies());
 	controller.register();
 	controller.register();
-	assert.deepEqual([...pi.bus.keys()], [FOOTER_STATUS_SOURCE_REQUEST_EVENT]);
+	assert.deepEqual([...pi.bus.keys()], [
+		FOOTER_STATUS_SOURCE_REQUEST_EVENT,
+		POST_FOOTER_SLOT_REQUEST_EVENT,
+	]);
 	let mountedRows: unknown;
 	const stopMountedListener = pi.events.on(FOOTER_MOUNTED_EVENT, (payload) => {
 		mountedRows = (payload as { rows?: unknown }).rows;
@@ -332,6 +337,118 @@ test("status source replays across load order and becomes inert after disposal",
 	assert.deepEqual(source.readStatuses(), []);
 	footer.dispose?.();
 	assert.deepEqual(source.readStatuses(), []);
+	controller.stop();
+});
+
+test("a registered post-footer shelf renders after the footer rows", () => {
+	const pi = new FakePi();
+	const controller = new FooterController(pi.api(), dependencies());
+	controller.register();
+	const ui: FakeUI = { statusWrites: [], widgetWrites: [] };
+	controller.start(makeContext(ui, [], "slot-session"));
+	const capabilities: Array<{
+		register(slot: {
+			id: string;
+			token: string;
+			order: number;
+			maxRows: number;
+			render(width: number): readonly string[];
+		}): { isActive(): boolean; dispose(): void } | undefined;
+	}> = [];
+	pi.events.on(POST_FOOTER_SLOT_READY_EVENT, (payload) => {
+		capabilities.push(payload as (typeof capabilities)[number]);
+	});
+	const footer = createFooter(ui, () => undefined);
+	assert.equal(capabilities.length, 1);
+	assert.doesNotThrow(() => pi.events.emit(
+		POST_FOOTER_SLOT_REQUEST_EVENT,
+		new Proxy({}, { get() { throw new Error("hostile request"); } }),
+	));
+	pi.events.emit(POST_FOOTER_SLOT_REQUEST_EVENT, { version: 1 });
+	pi.events.emit(POST_FOOTER_SLOT_REQUEST_EVENT, {
+		version: 1,
+		sessionId: "wrong-slot-session",
+	});
+	assert.equal(capabilities.length, 1);
+	pi.events.emit(POST_FOOTER_SLOT_REQUEST_EVENT, {
+		version: 1,
+		sessionId: "slot-session",
+	});
+	assert.equal(capabilities.length, 2);
+	const handle = capabilities.at(-1)?.register({
+		id: "neumie.sidebar.narrow",
+		token: "sidebar-slot",
+		order: 100,
+		maxRows: 7,
+		render: () => ["─".repeat(80), "narrow sidebar"],
+	});
+	assert.ok(handle);
+	assert.equal(handle.isActive(), true);
+	const lines = footer.render(80);
+	assert.equal(lines.length, 4);
+	assert.match(lines[0] ?? "", /project/);
+	assert.match(lines[1] ?? "", /GPT-5.6 Sol/);
+	assert.equal(lines[2], "─".repeat(80));
+	assert.equal(lines[3], "narrow sidebar");
+
+	handle.dispose();
+	assert.equal(handle.isActive(), false);
+	assert.equal(footer.render(80).length, FOOTER_ROWS);
+	footer.dispose?.();
+	controller.stop();
+});
+
+test("post-footer slots are bounded, terminal-safe, replaceable, and session-scoped", () => {
+	const pi = new FakePi();
+	const controller = new FooterController(pi.api(), dependencies());
+	controller.register();
+	const ui: FakeUI = { statusWrites: [], widgetWrites: [] };
+	controller.start(makeContext(ui, [], "bounded-slot-session"));
+	const capabilities: Array<{
+		register(slot: unknown): { isActive(): boolean; dispose(): void } | undefined;
+	}> = [];
+	pi.events.on(POST_FOOTER_SLOT_READY_EVENT, (payload) => {
+		capabilities.push(payload as (typeof capabilities)[number]);
+	});
+	const footer = createFooter(ui, () => undefined);
+	const capability = capabilities.at(-1);
+	assert.ok(capability);
+	assert.equal(capability.register({ id: "", token: "bad" }), undefined);
+	const first = capability.register({
+		id: "neumie.sidebar.narrow",
+		token: "first-slot",
+		order: 100,
+		maxRows: 3,
+		render: () => [
+			"  safe\x1b[31m red\x1b[0m  ",
+			"\x1b[2Jsecond\nline",
+			"x".repeat(100),
+			"overflow",
+		],
+	});
+	assert.ok(first);
+	const shelf = footer.render(12).slice(FOOTER_ROWS);
+	assert.equal(shelf.length, 3);
+	assert.ok(shelf.every((line) => visibleWidth(line) <= 12));
+	assert.match(shelf[0] ?? "", /^  safe/);
+	assert.match(shelf[0] ?? "", /\x1b\[31m/);
+	assert.doesNotMatch(shelf.join("\n"), /\x1b\[2J|second\nline/);
+
+	const replacement = capability.register({
+		id: "neumie.sidebar.narrow",
+		token: "replacement-slot",
+		order: 100,
+		maxRows: 1,
+		render: () => ["replacement"],
+	});
+	assert.ok(replacement);
+	assert.equal(first.isActive(), false);
+	assert.equal(replacement.isActive(), true);
+	assert.equal(footer.render(80).at(-1), "replacement");
+
+	controller.start(makeContext(ui, [], "next-slot-session"));
+	assert.equal(replacement.isActive(), false);
+	assert.deepEqual(footer.render(80), []);
 	controller.stop();
 });
 
@@ -431,6 +548,7 @@ test("a replaced footer generation becomes inert", () => {
 test("runtime modules cannot regain activity integrations", async () => {
 	const source = await Promise.all([
 		readFile(new URL("../extensions/controller.ts", import.meta.url), "utf8"),
+		readFile(new URL("../extensions/post-footer.ts", import.meta.url), "utf8"),
 		readFile(new URL("../extensions/tokens.ts", import.meta.url), "utf8"),
 	]);
 	assert.doesNotMatch(
@@ -443,5 +561,8 @@ test("default export registers the renamed extension entry point", () => {
 	const pi = new FakePi();
 	extension(pi.api());
 	assert.equal(pi.lifecycle.get("session_start")?.length, 1);
-	assert.deepEqual([...pi.bus.keys()], [FOOTER_STATUS_SOURCE_REQUEST_EVENT]);
+	assert.deepEqual([...pi.bus.keys()], [
+		FOOTER_STATUS_SOURCE_REQUEST_EVENT,
+		POST_FOOTER_SLOT_REQUEST_EVENT,
+	]);
 });

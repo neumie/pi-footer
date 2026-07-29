@@ -8,7 +8,23 @@ import { homedir } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { TokenUsage } from "./domain.ts";
 import { renderFooter, type ThemeLike } from "./layout.ts";
+import {
+	createPostFooterSlotHost,
+	POST_FOOTER_SLOT_READY_EVENT,
+	POST_FOOTER_SLOT_REQUEST_EVENT,
+	type PostFooterSlotHost,
+} from "./post-footer.ts";
 import { sessionTokens } from "./tokens.ts";
+
+export {
+	POST_FOOTER_SLOT_READY_EVENT,
+	POST_FOOTER_SLOT_REQUEST_EVENT,
+} from "./post-footer.ts";
+export type {
+	PostFooterSlot,
+	PostFooterSlotHandle,
+	PostFooterSlotReadyPayload,
+} from "./post-footer.ts";
 
 interface FooterDataLike {
 	getExtensionStatuses(): ReadonlyMap<string, string>;
@@ -112,6 +128,7 @@ export class FooterController {
 	private cancelPendingMount: (() => void) | undefined;
 	private requestRender: (() => void) | undefined;
 	private statusSource: ActiveStatusSource | undefined;
+	private postFooterSource: PostFooterSlotHost | undefined;
 	private nextGeneration = 0;
 	private registered = false;
 
@@ -147,6 +164,17 @@ export class FooterController {
 				if (request?.version !== 1 || !source) return;
 				if (request.sessionId !== source.payload.sessionId) return;
 				this.pi.events.emit(FOOTER_STATUS_SOURCE_READY_EVENT, source.payload);
+			} catch {
+				// Cross-extension payloads are untrusted; malformed requests are ignored.
+			}
+		});
+		this.pi.events.on(POST_FOOTER_SLOT_REQUEST_EVENT, (payload) => {
+			try {
+				const request = payload as { version?: unknown; sessionId?: unknown } | undefined;
+				const source = this.postFooterSource;
+				if (request?.version !== 1 || !source) return;
+				if (request.sessionId !== source.payload.sessionId) return;
+				this.pi.events.emit(POST_FOOTER_SLOT_READY_EVENT, source.payload);
 			} catch {
 				// Cross-extension payloads are untrusted; malformed requests are ignored.
 			}
@@ -199,6 +227,7 @@ export class FooterController {
 		this.cancelPendingMount?.();
 		this.cancelPendingMount = undefined;
 		this.clearStatusSource();
+		this.clearPostFooterSource();
 		this.requestRender = undefined;
 		this.session = undefined;
 	}
@@ -206,6 +235,11 @@ export class FooterController {
 	private clearStatusSource(): void {
 		this.statusSource?.deactivate();
 		this.statusSource = undefined;
+	}
+
+	private clearPostFooterSource(): void {
+		this.postFooterSource?.deactivate();
+		this.postFooterSource = undefined;
 	}
 
 	private createFooter(
@@ -237,12 +271,23 @@ export class FooterController {
 			this.statusSource = { payload, deactivate: () => { active = false; } };
 			this.pi.events.emit(FOOTER_STATUS_SOURCE_READY_EVENT, payload);
 		}
+		let postFooter: PostFooterSlotHost | undefined;
+		if (currentSessionId) {
+			postFooter = createPostFooterSlotHost({
+				sessionId: currentSessionId,
+				isCurrent: () => active && this.isCurrent(generation),
+				requestRender: callback,
+			});
+			this.clearPostFooterSource();
+			this.postFooterSource = postFooter;
+			this.pi.events.emit(POST_FOOTER_SLOT_READY_EVENT, postFooter.payload);
+		}
 		if (this.isCurrent(generation)) this.requestRender = callback;
 		return {
 			render: (width: number) => {
 				const runtime = this.session;
 				if (!runtime || runtime.generation !== generation) return [];
-				return renderFooter(
+				const footer = renderFooter(
 					{
 						cwd: displayCwd(runtime.ctx.cwd),
 						trusted: runtime.ctx.isProjectTrusted(),
@@ -256,10 +301,13 @@ export class FooterController {
 					theme,
 					width,
 				);
+				return [...footer, ...(postFooter?.render(width) ?? [])];
 			},
 			invalidate() {},
 			dispose: () => {
 				active = false;
+				postFooter?.deactivate();
+				if (this.postFooterSource === postFooter) this.postFooterSource = undefined;
 				if (this.statusSource?.payload.token === token) this.statusSource = undefined;
 				if (this.requestRender === callback) this.requestRender = undefined;
 			},

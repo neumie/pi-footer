@@ -76,7 +76,7 @@ export function formatModel(id: string): string {
 function sanitizeTerminalText(
 	value: string,
 	maxWidth: number,
-	preserveSgr: boolean,
+	options: { preserveSgr: boolean; preserveWhitespace?: boolean },
 ): string {
 	const input = value.slice(0, MAX_SOURCE_CHARS);
 	let output = "";
@@ -87,7 +87,7 @@ function sanitizeTerminalText(
 			const next = input[index + 1];
 			if (next === "[") {
 				const csi = skipCsi(input, index + 2);
-				if (preserveSgr && SAFE_SGR.test(csi.sequence)) output += csi.sequence;
+				if (options.preserveSgr && SAFE_SGR.test(csi.sequence)) output += csi.sequence;
 				index = csi.end;
 				continue;
 			}
@@ -118,16 +118,25 @@ function sanitizeTerminalText(
 		output += character;
 		index += 1;
 	}
+	if (options.preserveWhitespace) return truncateToWidth(output, maxWidth, "…");
 	const clean = output.replace(/\s+/g, " ").trim();
 	return clean ? truncateToWidth(clean, maxWidth, "…") : "";
 }
 
 /** Sanitize unstyled values such as paths, model IDs, and labels. */
 export function sanitizeDisplayText(value: string, maxWidth: number): string {
-	return sanitizeTerminalText(value, maxWidth, false);
+	return sanitizeTerminalText(value, maxWidth, { preserveSgr: false });
 }
 
 /** Preserve ordinary text and complete SGR styling, never terminal controls. */
 export function sanitizeStatusText(value: string, maxWidth: number): string {
-	return sanitizeTerminalText(value, maxWidth, true);
+	return sanitizeTerminalText(value, maxWidth, { preserveSgr: true });
+}
+
+/** Preserve line spacing and complete SGR styling, never terminal controls. */
+export function sanitizeTerminalLine(value: string, maxWidth: number): string {
+	return sanitizeTerminalText(value, maxWidth, {
+		preserveSgr: true,
+		preserveWhitespace: true,
+	});
 }
