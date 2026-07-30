@@ -398,6 +398,39 @@ test("a registered post-footer shelf renders after the footer rows", () => {
 	controller.stop();
 });
 
+test("post-footer slot handles survive a failing render request", () => {
+	const pi = new FakePi();
+	const controller = new FooterController(pi.api(), dependencies());
+	controller.register();
+	const ui: FakeUI = { statusWrites: [], widgetWrites: [] };
+	controller.start(makeContext(ui, [], "throwing-render-session"));
+	let capability: {
+		register(slot: unknown): { isActive(): boolean; dispose(): void } | undefined;
+	} | undefined;
+	pi.events.on(POST_FOOTER_SLOT_READY_EVENT, (payload) => {
+		capability = payload as typeof capability;
+	});
+	const footer = createFooter(ui, () => { throw new Error("render request failed"); });
+	assert.ok(capability);
+	let handle: { isActive(): boolean; dispose(): void } | undefined;
+	assert.doesNotThrow(() => {
+		handle = capability?.register({
+			id: "neumie.sidebar.narrow",
+			token: "throwing-render-slot",
+			order: 100,
+			maxRows: 1,
+			render: () => ["still active"],
+		});
+	});
+	assert.ok(handle);
+	assert.equal(handle.isActive(), true);
+	assert.equal(footer.render(80).at(-1), "still active");
+	assert.doesNotThrow(() => handle?.dispose());
+	assert.equal(handle.isActive(), false);
+	footer.dispose?.();
+	controller.stop();
+});
+
 test("post-footer slots are bounded, terminal-safe, replaceable, and session-scoped", () => {
 	const pi = new FakePi();
 	const controller = new FooterController(pi.api(), dependencies());

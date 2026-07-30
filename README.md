@@ -37,7 +37,7 @@ Pi 0.82.1 renders every `belowEditor` widget before the footer and exposes no `b
 - request: `pi-footer:post-footer:v1:request` with `{ version: 1, sessionId }`
 - ready: `pi-footer:post-footer:v1:ready` with `{ version: 1, sessionId, token, register }`
 
-`register()` accepts a stable id/token, order, row bound, and synchronous width-aware renderer. The footer validates registrations, preserves only safe terminal text and SGR styling, caps all trailing output at 16 rows, isolates renderer failures, and returns a generation-safe handle. Handles become inactive after replacement, footer disposal, or session replacement. The footer still knows nothing about subagents or jobs; the sidebar owns the registered renderer and all activity data.
+`register()` accepts a stable id/token, order, row bound, and synchronous width-aware renderer. The footer validates registrations, preserves only safe terminal text and SGR styling, caps all trailing output at 16 rows, isolates renderer and render-request failures, and returns a generation-safe handle. Handles become inactive after replacement, footer disposal, or session replacement. The footer still knows nothing about subagents or jobs; the sidebar owns the registered renderer and all activity data.
 
 ## Install
 

@@ -113,6 +113,14 @@ class ActivePostFooterSlotHost implements PostFooterSlotHost {
 		return this.active && this.options.isCurrent();
 	}
 
+	private requestRender(): void {
+		try {
+			this.options.requestRender();
+		} catch {
+			// Rendering remains available on Pi's next ordinary frame.
+		}
+	}
+
 	private register(value: PostFooterSlot): PostFooterSlotHandle | undefined {
 		if (!this.isActive()) return undefined;
 		const slot = parseSlot(value);
@@ -132,12 +140,12 @@ class ActivePostFooterSlotHost implements PostFooterSlotHost {
 				registration.active = false;
 				if (this.registrations.get(slot.id) !== registration) return;
 				this.registrations.delete(slot.id);
-				this.options.requestRender();
+				this.requestRender();
 			},
 		});
 		registration = { slot, active: true, handle };
 		this.registrations.set(slot.id, registration);
-		this.options.requestRender();
+		this.requestRender();
 		return handle;
 	}
 
