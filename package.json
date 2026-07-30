@@ -1,6 +1,6 @@
 {
   "name": "@neumie/pi-footer",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "A compact two-row session footer for Pi.",
   "type": "module",
   "license": "MIT",
@@ -33,8 +33,8 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.82.1 <0.83.0",
-    "@earendil-works/pi-tui": ">=0.82.1 <0.83.0"
+    "@earendil-works/pi-coding-agent": ">=0.82.1 <0.84.0",
+    "@earendil-works/pi-tui": ">=0.82.1 <0.84.0"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.82.1",
