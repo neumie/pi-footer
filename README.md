@@ -13,17 +13,22 @@ GPT-5.6 Sol · high · 61%/258k · ↑412k ↓18k                 extension stat
 - Current directory and project trust state.
 - Model, reasoning effort, context usage, and parent-session input/output tokens.
 - Safe, width-bounded rendering of allowed extension statuses; sidebar activity, MCP/auth, and LSP infrastructure statuses stay hidden.
+- Minimal pulsing `goal active` indicator from `pi-subagents-goal`'s versioned, session-scoped status API.
 - Announces its base mounted height as `{ rows: 2 }` on `pi-footer:mounted`.
 - Exposes Pi's read-only extension-status map through a versioned, session-scoped capability for `pi-sidebar`.
 - Hosts a bounded post-footer composition slot so a compatible narrow sidebar can render below these two rows without taking footer ownership.
 - Defers reload-only mounting by one event-loop turn so Pi can settle its layout.
 - No monetary-cost display.
 
-Async subagents and background jobs are intentionally not integrated here. Their activity belongs in [`pi-sidebar`](https://github.com/neumie/pi-sidebar); matching transient status keys are suppressed to avoid duplicate output.
+Async subagents and background jobs are intentionally not integrated here. Their activity belongs in [`pi-sidebar`](https://github.com/neumie/pi-sidebar); matching transient status keys are suppressed to avoid duplicate output. Goal details also belong in the sidebar; the footer shows only a compact active/paused/faulted phase indicator.
+
+## Goal activity
+
+The footer requests `@neumie/pi-subagents-goal:v1:status` through `@neumie/pi-subagents-goal:v1:status-request`. It validates exact session, provider instance, monotonic sequence, phase, and live-state consistency. While a goal is active, a bounded 500 ms timer alternates `◆`/`◇` and requests only a footer repaint; paused, cancelling, exhausted, or faulted goals use a static phase label, and completed/cancelled goals disappear. Malformed, foreign, stale, or absent providers are silent. No goal IDs, objective, child data, tokens, files, or artifacts are read by this adapter.
 
 ## Status-source compatibility seam
 
-Pi 0.82.1 provides extension statuses only to custom footer factories. To let `pi-sidebar` surface actionable infrastructure failures without taking ownership of the footer, `pi-footer` supports this in-process request/replay protocol:
+Pi 0.83.0 provides extension statuses only to custom footer factories. To let `pi-sidebar` surface actionable infrastructure failures without taking ownership of the footer, `pi-footer` supports this in-process request/replay protocol:
 
 - request: `pi-footer:status-source:v1:request` with `{ version: 1, sessionId }`
 - ready: `pi-footer:status-source:v1:ready` with `{ version: 1, sessionId, token, readStatuses }`
@@ -32,7 +37,7 @@ Pi 0.82.1 provides extension statuses only to custom footer factories. To let `p
 
 ## Post-footer composition seam
 
-Pi 0.82.1 renders every `belowEditor` widget before the footer and exposes no `belowFooter` placement. To preserve footer ownership while allowing `pi-sidebar` 0.7.0 or newer to put its narrow-bottom shelf last, `pi-footer` publishes a second session-scoped capability:
+Pi 0.83.0 renders every `belowEditor` widget before the footer and exposes no `belowFooter` placement. To preserve footer ownership while allowing `pi-sidebar` 0.7.0 or newer to put its narrow-bottom shelf last, `pi-footer` publishes a second session-scoped capability:
 
 - request: `pi-footer:post-footer:v1:request` with `{ version: 1, sessionId }`
 - ready: `pi-footer:post-footer:v1:ready` with `{ version: 1, sessionId, token, register }`
@@ -65,12 +70,12 @@ npm install
 npm run check
 ```
 
-Requires Node.js 22.19.0 or newer and Pi 0.82.1. The extension is loaded directly from TypeScript; no build step is required.
+Requires Node.js 22.19.0 or newer and Pi 0.83.0. The extension is loaded directly from TypeScript; no build step is required.
 
 ## Notes
 
 - This extension replaces Pi's complete footer. Another extension calling `ctx.ui.setFooter()` may override it depending on load order.
-- It does not call `ctx.ui.setStatus()` or `ctx.ui.setWidget()` and does not subscribe to subagent or background-job events. Its event-bus subscriptions only serve status-source and post-footer capability replay requests.
+- It does not call `ctx.ui.setStatus()` or `ctx.ui.setWidget()` and does not subscribe to subagent or background-job events. Its only activity subscription is the display-safe goal status protocol; remaining event-bus subscriptions serve status-source and post-footer capability replay requests.
 - Session token totals come only from assistant messages on the active parent-session branch; legacy subagent snapshot entries are ignored.
 
 ## License

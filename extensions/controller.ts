@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { TokenUsage } from "./domain.ts";
+import { GoalActivitySource, type GoalPulseScheduler } from "./goals.ts";
 import { renderFooter, type ThemeLike } from "./layout.ts";
 import {
 	createPostFooterSlotHost,
@@ -32,6 +33,7 @@ interface FooterDataLike {
 
 export interface FooterRuntimeDependencies {
 	scheduleMount(handler: () => void): () => void;
+	schedulePulse: GoalPulseScheduler;
 }
 
 export const FOOTER_MOUNTED_EVENT = "pi-footer:mounted";
@@ -65,6 +67,11 @@ function defaultDependencies(): FooterRuntimeDependencies {
 		scheduleMount(handler) {
 			const immediate = setImmediate(handler);
 			return () => clearImmediate(immediate);
+		},
+		schedulePulse(handler) {
+			const timer = setInterval(handler, 500);
+			timer.unref?.();
+			return () => clearInterval(timer);
 		},
 	};
 }
@@ -129,6 +136,7 @@ export class FooterController {
 	private requestRender: (() => void) | undefined;
 	private statusSource: ActiveStatusSource | undefined;
 	private postFooterSource: PostFooterSlotHost | undefined;
+	private readonly goalActivity: GoalActivitySource;
 	private nextGeneration = 0;
 	private registered = false;
 
@@ -137,6 +145,11 @@ export class FooterController {
 		dependencies: Partial<FooterRuntimeDependencies> = {},
 	) {
 		this.dependencies = { ...defaultDependencies(), ...dependencies };
+		this.goalActivity = new GoalActivitySource(
+			pi,
+			() => this.repaint(),
+			this.dependencies.schedulePulse,
+		);
 	}
 
 	register(): void {
@@ -191,6 +204,7 @@ export class FooterController {
 			mainTokens: sessionTokens(ctx),
 		};
 		this.session = runtime;
+		this.goalActivity.start(sessionId(ctx));
 		if (!deferMount) this.mount(runtime);
 		return runtime;
 	}
@@ -224,6 +238,7 @@ export class FooterController {
 
 	private resetSession(): void {
 		++this.nextGeneration;
+		this.goalActivity.stop();
 		this.cancelPendingMount?.();
 		this.cancelPendingMount = undefined;
 		this.clearStatusSource();
@@ -287,6 +302,9 @@ export class FooterController {
 			render: (width: number) => {
 				const runtime = this.session;
 				if (!runtime || runtime.generation !== generation) return [];
+				const statuses = new Map(footerData.getExtensionStatuses());
+				const goalStatus = this.goalActivity.text(Date.now());
+				if (goalStatus) statuses.set("@neumie/pi-subagents-goal", goalStatus);
 				const footer = renderFooter(
 					{
 						cwd: displayCwd(runtime.ctx.cwd),
@@ -296,7 +314,7 @@ export class FooterController {
 						inputTokens: runtime.mainTokens.input,
 						outputTokens: runtime.mainTokens.output,
 						contextUsage: runtime.ctx.getContextUsage(),
-						statuses: footerData.getExtensionStatuses(),
+						statuses,
 					},
 					theme,
 					width,
