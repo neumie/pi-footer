@@ -25,6 +25,10 @@ import {
 	sanitizeDisplayText,
 	sanitizeStatusText,
 } from "../extensions/domain.ts";
+import {
+	GOAL_STATUS_EVENT,
+	GOAL_STATUS_REQUEST_EVENT,
+} from "../extensions/goals.ts";
 import extension from "../extensions/footer.ts";
 import { renderFooter, type ThemeLike } from "../extensions/layout.ts";
 import { sessionTokens } from "../extensions/tokens.ts";
@@ -110,6 +114,7 @@ function dependencies(
 			const immediate = setImmediate(handler);
 			return () => clearImmediate(immediate);
 		},
+		schedulePulse: () => () => undefined,
 		...overrides,
 	};
 }
@@ -243,12 +248,16 @@ test("layout fits Unicode and keeps sidebar activity out of the footer", () => {
 	assert.doesNotMatch(hostile.join("\n"), /\x1b|\nINJECTED/);
 });
 
-test("controller mounts without writing statuses or subscribing to activity events", async () => {
+test("controller renders goal activity without writing extension statuses", async () => {
 	const pi = new FakePi();
+	const goalRequests: unknown[] = [];
+	pi.events.on(GOAL_STATUS_REQUEST_EVENT, (payload) => goalRequests.push(payload));
 	const controller = new FooterController(pi.api(), dependencies());
 	controller.register();
 	controller.register();
 	assert.deepEqual([...pi.bus.keys()], [
+		GOAL_STATUS_REQUEST_EVENT,
+		GOAL_STATUS_EVENT,
 		FOOTER_STATUS_SOURCE_REQUEST_EVENT,
 		POST_FOOTER_SLOT_REQUEST_EVENT,
 	]);
@@ -265,6 +274,7 @@ test("controller mounts without writing statuses or subscribing to activity even
 	const ui: FakeUI = { statusWrites: [], widgetWrites: [] };
 	const ctx = makeContext(ui, branch);
 	controller.start(ctx);
+	assert.deepEqual(goalRequests, [{ version: 1, sessionId: "footer-test-session" }]);
 	assert.equal(mountedRows, FOOTER_ROWS);
 	stopMountedListener();
 	let renderRequests = 0;
@@ -275,6 +285,14 @@ test("controller mounts without writing statuses or subscribing to activity even
 	);
 	assert.match(footer.render(120).join("\n"), /↑12 ↓8/);
 	assert.match(footer.render(120).join("\n"), /kept/);
+	pi.events.emit(GOAL_STATUS_EVENT, {
+		version: 1,
+		providerId: "goal-provider",
+		sequence: 1,
+		sessionId: "footer-test-session",
+		goal: { phase: "active", live: true },
+	});
+	assert.match(footer.render(120).join("\n"), /goal active/);
 	assert.deepEqual(ui.statusWrites, []);
 	assert.deepEqual(ui.widgetWrites, []);
 	assert.equal(pi.bus.get("subagent:async-started"), undefined);
@@ -578,15 +596,18 @@ test("a replaced footer generation becomes inert", () => {
 	controller.stop();
 });
 
-test("runtime modules cannot regain activity integrations", async () => {
+test("runtime integrations remain event-only and artifact-free", async () => {
 	const source = await Promise.all([
 		readFile(new URL("../extensions/controller.ts", import.meta.url), "utf8"),
+		readFile(new URL("../extensions/goals.ts", import.meta.url), "utf8"),
 		readFile(new URL("../extensions/post-footer.ts", import.meta.url), "utf8"),
 		readFile(new URL("../extensions/tokens.ts", import.meta.url), "utf8"),
 	]);
+	const combined = source.join("\n");
+	assert.match(combined, /@neumie\/pi-subagents-goal:v1:status/u);
 	assert.doesNotMatch(
-		source.join("\n"),
-		/node:fs|appendEntry|setInterval|status\.json|subagent:async|background-jobs:changed|asyncDir|pi-subagents-uid/,
+		combined,
+		/node:fs|appendEntry|status\.json|subagent:async|background-jobs:changed|asyncDir|pi-subagents-uid/,
 	);
 });
 
@@ -595,6 +616,7 @@ test("default export registers the renamed extension entry point", () => {
 	extension(pi.api());
 	assert.equal(pi.lifecycle.get("session_start")?.length, 1);
 	assert.deepEqual([...pi.bus.keys()], [
+		GOAL_STATUS_EVENT,
 		FOOTER_STATUS_SOURCE_REQUEST_EVENT,
 		POST_FOOTER_SLOT_REQUEST_EVENT,
 	]);
