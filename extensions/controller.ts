@@ -80,6 +80,7 @@ interface SessionRuntime {
 	generation: number;
 	ctx: ExtensionContext;
 	sessionManager: ExtensionContext["sessionManager"];
+	sessionName?: string;
 	modelId?: string;
 	mainTokens: TokenUsage;
 }
@@ -106,6 +107,15 @@ function sessionId(ctx: ExtensionContext): string | undefined {
 	try {
 		const id = ctx.sessionManager.getSessionId();
 		return typeof id === "string" && id.length > 0 ? id : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function sessionName(ctx: ExtensionContext): string | undefined {
+	try {
+		const name = ctx.sessionManager.getSessionName();
+		return typeof name === "string" && name.length > 0 ? name : undefined;
 	} catch {
 		return undefined;
 	}
@@ -161,6 +171,12 @@ export class FooterController {
 			if (deferMount) this.deferMount(runtime);
 		});
 		this.pi.on("session_shutdown", () => this.stop());
+		this.pi.on("session_info_changed", (event, ctx) => {
+			const current = this.currentSessionFor(ctx);
+			if (!current) return;
+			current.sessionName = event.name;
+			this.repaint();
+		});
 		this.pi.on("model_select", (event, ctx) => {
 			const current = this.currentSessionFor(ctx);
 			if (!current) return;
@@ -200,6 +216,7 @@ export class FooterController {
 			generation: ++this.nextGeneration,
 			ctx,
 			sessionManager: ctx.sessionManager,
+			sessionName: sessionName(ctx),
 			modelId: ctx.model?.id,
 			mainTokens: sessionTokens(ctx),
 		};
@@ -309,6 +326,7 @@ export class FooterController {
 					{
 						cwd: displayCwd(runtime.ctx.cwd),
 						trusted: runtime.ctx.isProjectTrusted(),
+						sessionName: runtime.sessionName,
 						modelId: runtime.modelId ?? runtime.ctx.model?.id ?? "no-model",
 						thinkingLevel: thinkingLevel(this.pi),
 						inputTokens: runtime.mainTokens.input,

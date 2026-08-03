@@ -3,14 +3,14 @@
 A compact two-row footer for [Pi](https://github.com/earendil-works/pi-mono).
 
 ```text
-~/code/project · trusted
+~/code/project · Refactor auth
 GPT-5.6 Sol · high · 61%/258k · ↑412k ↓18k                 extension status
 ```
 
 ## Features
 
 - Two compact rows that preserve project and model information.
-- Current directory and project trust state.
+- Current directory plus the optional `/name` value on row one; trusted paths are muted and untrusted paths are error-colored without a separate trust label.
 - Model, reasoning effort, context usage, and parent-session input/output tokens.
 - Safe, width-bounded rendering of allowed extension statuses; sidebar activity, MCP/auth, and LSP infrastructure statuses stay hidden.
 - Minimal pulsing `goal active` indicator from `pi-subagents-goal`'s versioned, session-scoped status API.

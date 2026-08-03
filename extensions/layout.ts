@@ -14,6 +14,7 @@ export interface ThemeLike {
 export interface FooterViewModel {
 	cwd: string;
 	trusted: boolean;
+	sessionName?: string;
 	modelId: string;
 	thinkingLevel: string;
 	inputTokens: number;
@@ -21,6 +22,8 @@ export interface FooterViewModel {
 	contextUsage?: { contextWindow: number; percent: number | null };
 	statuses: ReadonlyMap<string, string>;
 }
+
+const MAX_SESSION_NAME_WIDTH = 48;
 
 function effortColor(level: string): string {
 	if (level === "off") return "dim";
@@ -113,15 +116,42 @@ export function renderFooter(
 ): string[] {
 	const divider = theme.fg("dim", " · ");
 	const ellipsis = theme.fg("dim", "…");
-	const trust = `${divider}${theme.fg(view.trusted ? "success" : "warning", view.trusted ? "trusted" : "untrusted")}`;
-	const cwd = theme.fg(
-		"muted",
-		truncatePath(
-			sanitizeDisplayText(view.cwd, 4_096),
-			width - visibleWidth(trust),
-		),
+	const safeCwd = sanitizeDisplayText(view.cwd, 4_096);
+	const safeSessionName = sanitizeDisplayText(view.sessionName ?? "", 512);
+	let displayedName = "";
+	let cwdBudget = width;
+	if (safeSessionName) {
+		const dividerWidth = visibleWidth(divider);
+		const minimumCwdWidth = Math.min(
+			8,
+			Math.max(1, Math.floor((width - dividerWidth) / 2)),
+		);
+		const nameBudget = Math.min(
+			MAX_SESSION_NAME_WIDTH,
+			Math.max(0, width - dividerWidth - minimumCwdWidth),
+		);
+		if (nameBudget > 0) {
+			displayedName = theme.fg(
+				"text",
+				truncateToWidth(safeSessionName, nameBudget, ellipsis),
+			);
+			cwdBudget = Math.max(
+				0,
+				width - dividerWidth - visibleWidth(displayedName),
+			);
+		}
+	}
+	const displayedCwd = truncatePath(safeCwd, cwdBudget);
+	let cwd = "";
+	if (displayedCwd) {
+		const cwdColor = view.trusted ? "muted" : "error";
+		cwd = theme.fg(cwdColor, displayedCwd);
+	}
+	const row1 = truncateToWidth(
+		`${cwd}${cwd && displayedName ? divider : ""}${displayedName}`,
+		width,
+		ellipsis,
 	);
-	const row1 = alignSides(`${cwd}${trust}`, "", width, ellipsis);
 
 	const model = theme.fg("accent", theme.bold(formatModel(view.modelId)));
 	const safeThinkingLevel = sanitizeDisplayText(view.thinkingLevel, 20);

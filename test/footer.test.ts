@@ -77,6 +77,7 @@ function makeContext(
 	ui: FakeUI,
 	branchEntries: unknown[] = [],
 	sessionId = "footer-test-session",
+	sessionName?: string,
 ): ExtensionContext {
 	return {
 		cwd: "/tmp/project/emoji-🧪",
@@ -87,6 +88,7 @@ function makeContext(
 			getBranch: () => branchEntries,
 			getSessionFile: () => sessionId,
 			getSessionId: () => sessionId,
+			getSessionName: () => sessionName,
 		},
 		ui: {
 			setStatus(...args: unknown[]) {
@@ -182,6 +184,7 @@ test("layout fits Unicode and keeps sidebar activity out of the footer", () => {
 		{
 			cwd: "~/proj/🧪/e\u0301/very-long-leaf",
 			trusted: true,
+			sessionName: "named-session",
 			modelId: "gpt-5.6-sol",
 			thinkingLevel: "high",
 			inputTokens: 1_234,
@@ -197,11 +200,13 @@ test("layout fits Unicode and keeps sidebar activity out of the footer", () => {
 	);
 	assert.equal(lines.length, FOOTER_ROWS);
 	assert.ok(lines.every((line) => visibleWidth(line) <= 28));
+	assert.match(lines[0], /named-session/);
 
 	const themed = renderFooter(
 		{
 			cwd: "~/x",
 			trusted: true,
+			sessionName: "Named work",
 			modelId: "x",
 			thinkingLevel: "off",
 			inputTokens: 0,
@@ -222,7 +227,11 @@ test("layout fits Unicode and keeps sidebar activity out of the footer", () => {
 		},
 		500,
 	);
-	assert.match(themed[0], /<success>trusted<\/success>/);
+	assert.match(
+		themed[0],
+		/<muted>~\/x<\/muted><dim> · <\/dim><text>Named work<\/text>/,
+	);
+	assert.doesNotMatch(themed[0], /trusted|untrusted/);
 	assert.match(themed[1], /A styled.*Z status/);
 	assert.doesNotMatch(
 		themed.join("\n"),
@@ -230,10 +239,31 @@ test("layout fits Unicode and keeps sidebar activity out of the footer", () => {
 	);
 	assert.doesNotMatch(themed.join("\n"), /agents|shells|\x1b\]/);
 
+	const untrusted = renderFooter(
+		{
+			cwd: "~/unsafe",
+			trusted: false,
+			sessionName: "Audit",
+			modelId: "x",
+			thinkingLevel: "off",
+			inputTokens: 0,
+			outputTokens: 0,
+			statuses: new Map(),
+		},
+		{
+			fg: (color, text) => `<${color}>${text}</${color}>`,
+			bold: (text) => `<bold>${text}</bold>`,
+		},
+		500,
+	);
+	assert.match(untrusted[0], /<error>~\/unsafe<\/error>/);
+	assert.doesNotMatch(untrusted[0], /trusted|untrusted/);
+
 	const hostile = renderFooter(
 		{
 			cwd: "/tmp/good\nINJECTED\x1b]title\x07",
 			trusted: true,
+			sessionName: "safe\nNAME\x1b]title\x07",
 			modelId: "openai/safe\x1b[2J-model",
 			thinkingLevel: "high\x1b[2J\nINJECTED",
 			inputTokens: 0,
@@ -244,8 +274,31 @@ test("layout fits Unicode and keeps sidebar activity out of the footer", () => {
 		120,
 	);
 	assert.match(hostile.join("\n"), /good INJECTED/);
+	assert.match(hostile[0], /safe NAME/);
 	assert.match(hostile.join("\n"), /safe-model/);
 	assert.doesNotMatch(hostile.join("\n"), /\x1b|\nINJECTED/);
+});
+
+test("named row stays bounded on tiny terminal widths", () => {
+	for (let width = 1; width <= 16; width += 1) {
+		const lines = renderFooter(
+			{
+				cwd: "~/very/long/project/path",
+				trusted: false,
+				sessionName: "Very long session name",
+				modelId: "gpt-5.6-sol",
+				thinkingLevel: "max",
+				inputTokens: 1_000,
+				outputTokens: 2_000,
+				statuses: new Map([["notice", "Long extension status"]]),
+			},
+			theme(),
+			width,
+		);
+		assert.equal(lines.length, FOOTER_ROWS);
+		assert.ok(lines.every((line) => visibleWidth(line) <= width));
+		assert.doesNotMatch(lines.join("\n"), /trusted|untrusted/);
+	}
 });
 
 test("controller renders goal activity without writing extension statuses", async () => {
@@ -272,7 +325,7 @@ test("controller renders goal activity without writing extension statuses", asyn
 		},
 	];
 	const ui: FakeUI = { statusWrites: [], widgetWrites: [] };
-	const ctx = makeContext(ui, branch);
+	const ctx = makeContext(ui, branch, "footer-test-session", "Initial name");
 	controller.start(ctx);
 	assert.deepEqual(goalRequests, [{ version: 1, sessionId: "footer-test-session" }]);
 	assert.equal(mountedRows, FOOTER_ROWS);
@@ -285,6 +338,7 @@ test("controller renders goal activity without writing extension statuses", asyn
 	);
 	assert.match(footer.render(120).join("\n"), /↑12 ↓8/);
 	assert.match(footer.render(120).join("\n"), /kept/);
+	assert.match(footer.render(120)[0], /Initial name/);
 	pi.events.emit(GOAL_STATUS_EVENT, {
 		version: 1,
 		providerId: "goal-provider",
@@ -307,6 +361,13 @@ test("controller renders goal activity without writing extension statuses", asyn
 	await modelSelect({ model: { id: "claude-opus-4-8" } }, ctx);
 	assert.match(footer.render(120).join("\n"), /opus-4-8/);
 	assert.ok(renderRequests > before);
+
+	const sessionInfoChanged = pi.lifecycle.get("session_info_changed")?.[0];
+	assert.ok(sessionInfoChanged);
+	await sessionInfoChanged({ name: "Named from command" }, ctx);
+	assert.match(footer.render(120)[0], /Named from command/);
+	await sessionInfoChanged({ name: undefined }, ctx);
+	assert.doesNotMatch(footer.render(120)[0], /Named from command/);
 	footer.dispose?.();
 	controller.stop();
 });
@@ -615,6 +676,7 @@ test("default export registers the renamed extension entry point", () => {
 	const pi = new FakePi();
 	extension(pi.api());
 	assert.equal(pi.lifecycle.get("session_start")?.length, 1);
+	assert.equal(pi.lifecycle.get("session_info_changed")?.length, 1);
 	assert.deepEqual([...pi.bus.keys()], [
 		GOAL_STATUS_EVENT,
 		FOOTER_STATUS_SOURCE_REQUEST_EVENT,
