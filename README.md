@@ -24,7 +24,7 @@ Async subagents and background jobs are intentionally not integrated here. Their
 
 ## Goal activity
 
-The footer requests `@neumie/pi-subagents-goal:v1:status` through `@neumie/pi-subagents-goal:v1:status-request`. It validates exact session, provider instance, monotonic sequence, phase, and live-state consistency. While a goal is active, a bounded 500 ms timer alternates `◆`/`◇` and requests only a footer repaint; paused, cancelling, exhausted, or faulted goals use a static phase label, and completed/cancelled goals disappear. Malformed, foreign, stale, or absent providers are silent. No goal IDs, objective, child data, tokens, files, or artifacts are read by this adapter.
+The footer requests `@neumie/pi-subagents-goal:v1:status` through `@neumie/pi-subagents-goal:v1:status-request`. It validates exact session, provider instance, monotonic sequence, phase, and live-state consistency. While a goal is active, a bounded one-second timer alternates `◆`/`◇` and requests only a footer repaint; paused, cancelling, exhausted, or faulted goals use a static phase label, and completed/cancelled goals disappear. Malformed, foreign, stale, or absent providers are silent. No goal IDs, objective, child data, tokens, files, or artifacts are read by this adapter.
 
 ## Status-source compatibility seam
 

@@ -7,7 +7,11 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { TokenUsage } from "./domain.ts";
-import { GoalActivitySource, type GoalPulseScheduler } from "./goals.ts";
+import {
+	GOAL_PULSE_INTERVAL_MS,
+	GoalActivitySource,
+	type GoalPulseScheduler,
+} from "./goals.ts";
 import { renderFooter, type ThemeLike } from "./layout.ts";
 import {
 	createPostFooterSlotHost,
@@ -69,7 +73,7 @@ function defaultDependencies(): FooterRuntimeDependencies {
 			return () => clearImmediate(immediate);
 		},
 		schedulePulse(handler) {
-			const timer = setInterval(handler, 500);
+			const timer = setInterval(handler, GOAL_PULSE_INTERVAL_MS);
 			timer.unref?.();
 			return () => clearInterval(timer);
 		},

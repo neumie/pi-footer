@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
+	GOAL_PULSE_INTERVAL_MS,
 	GOAL_STATUS_EVENT,
 	GOAL_STATUS_REQUEST_EVENT,
 	GoalActivitySource,
@@ -67,7 +68,7 @@ describe("goal footer activity", () => {
 		assert.equal(source.text(0), undefined);
 		events.emit(GOAL_STATUS_EVENT, envelope());
 		assert.equal(source.text(0), "◆ goal active");
-		assert.equal(source.text(500), "◇ goal active");
+		assert.equal(source.text(GOAL_PULSE_INTERVAL_MS), "◇ goal active");
 		assert.equal(typeof pulse, "function");
 		const beforePulse = renders;
 		pulse?.();

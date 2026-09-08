@@ -3,6 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 export const GOAL_STATUS_PROTOCOL_VERSION = 1 as const;
 export const GOAL_STATUS_REQUEST_EVENT = "@neumie/pi-subagents-goal:v1:status-request";
 export const GOAL_STATUS_EVENT = "@neumie/pi-subagents-goal:v1:status";
+export const GOAL_PULSE_INTERVAL_MS = 1_000;
 
 const PHASES = new Set([
 	"active",
@@ -132,7 +133,7 @@ export class GoalActivitySource {
 		const goal = this.status?.goal;
 		if (!goal?.live) return undefined;
 		if (goal.phase === "active") {
-			return `${Math.floor(now / 500) % 2 === 0 ? "◆" : "◇"} goal active`;
+			return `${Math.floor(now / GOAL_PULSE_INTERVAL_MS) % 2 === 0 ? "◆" : "◇"} goal active`;
 		}
 		return `◇ goal ${goal.phase.replaceAll("_", " ")}`;
 	}
